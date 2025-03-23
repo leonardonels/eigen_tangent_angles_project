@@ -1,4 +1,4 @@
-# eigen_tangent_angles_project
+# small tool to test eigen to look for tangent angles given a closed line
 
 > To download:
 ```commandline
