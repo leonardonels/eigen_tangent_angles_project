@@ -1,4 +1,4 @@
-# small tool to compute tangent angles
+# Small Tool to Compute Tangent Angles
 
 > To download:
 ```commandline
