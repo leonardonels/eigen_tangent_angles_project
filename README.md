@@ -1,4 +1,4 @@
-# small tool to compute tangent angles given a closed line
+# small tool to compute tangent angles
 
 > To download:
 ```commandline
