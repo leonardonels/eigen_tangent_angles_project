@@ -121,18 +121,18 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> read_csv(const char* input_filename)
 }
 
 // EIGEN ********************************************************
-void computeSplineCoefficients(const Eigen::VectorXd& x, const Eigen::VectorXd& y, 
-                                Eigen::VectorXd& a, Eigen::VectorXd& b, 
-                                Eigen::VectorXd& c, Eigen::VectorXd& d) {
+void compute_spline_coefficients(const Eigen::VectorXd& x, const Eigen::VectorXd& y, 
+                                  Eigen::VectorXd& a, Eigen::VectorXd& b, 
+                                  Eigen::VectorXd& c, Eigen::VectorXd& d) {
     int n = x.size();
     Eigen::MatrixXd A = Eigen::MatrixXd::Zero(n, n);  // System matrix
     Eigen::VectorXd B = Eigen::VectorXd::Zero(n);     // Right-hand side vector
     Eigen::VectorXd C = Eigen::VectorXd::Zero(n);     // Solution vector for second derivatives
 
     // Step 1: Set up the system of equations
-    // Boundary conditions (for closed spline)
-    A(0, 0) = 1;  // For the first point, set the second derivative to zero
-    A(n - 1, n - 1) = 1;  // For the last point, set the second derivative to zero
+    // Periodic boundary conditions (for closed spline)
+    A(0, 0) = 1;
+    A(n - 1, n - 1) = 1;
 
     // Create the system for the second derivatives
     for (int i = 1; i < n - 1; ++i) {
@@ -159,14 +159,15 @@ void computeSplineCoefficients(const Eigen::VectorXd& x, const Eigen::VectorXd& 
         b[i] = (y[i + 1] - y[i]) / h - h * (C[i + 1] + 2 * C[i]) / 3;
     }
 
-    // For the last point, apply the boundary condition for the closed spline
+    // Apply closed boundary conditions
     double h = x[n - 1] - x[n - 2];
     c[n - 1] = C[n - 1];
     d[n - 1] = (C[0] - C[n - 1]) / (3 * h);
     b[n - 1] = (y[0] - y[n - 1]) / h - h * (C[0] + 2 * C[n - 1]) / 3;
 }
 
-double firstDerivative(double x_query, const Eigen::VectorXd& x, const Eigen::VectorXd& a,
+
+double first_derivative_interpolation(double x_query, const Eigen::VectorXd& x, const Eigen::VectorXd& a,
                        const Eigen::VectorXd& b, const Eigen::VectorXd& c, const Eigen::VectorXd& d) {
     int n = x.size();
     
@@ -181,19 +182,22 @@ double firstDerivative(double x_query, const Eigen::VectorXd& x, const Eigen::Ve
     return b[n-1] + 2 * c[n-1] * dx + 3 * d[n-1] * dx * dx;
 }
 
-double secondDerivative(double x_query, const Eigen::VectorXd& x, const Eigen::VectorXd& a,
-                        const Eigen::VectorXd& b, const Eigen::VectorXd& c, const Eigen::VectorXd& d) {
-    int n = x.size();
-    
-    for (int i = 0; i < n - 1; ++i) {
-        if (x_query >= x[i] && x_query <= x[i + 1]) {
-            double dx = x_query - x[i];
-            return 2 * c[i] + 6 * d[i] * dx;
-        }
-    }
+double first_derivative(double x_query, const Eigen::VectorXd& x, const Eigen::VectorXd& a,
+    const Eigen::VectorXd& b, const Eigen::VectorXd& c, const Eigen::VectorXd& d) {
+        int n = x.size();
 
-    double dx = x_query - x[n-1];
-    return 2 * c[n-1] + 6 * d[n-1] * dx;
+        for (int i = 0; i < n - 1; ++i) {
+            if (x_query == x[i]) {
+                return b[i] + 2 * c[i] * 0 + 3 * d[i] * 0 * 0; // Since dx = 0
+            }
+        }
+    
+        if (x_query == x[n-1]) {
+            return b[n-1] + 2 * c[n-1] * 0 + 3 * d[n-1] * 0 * 0; // Since dx = 0
+        }
+    
+        std::cerr << "Error: x_query is out of the spline bounds.\n";
+        return std::numeric_limits<double>::quiet_NaN();
 }
 
 // UTILS ********************************************************
@@ -216,6 +220,36 @@ template<typename T>
 double vector_mean(const std::vector<T>& v){
     double sum = std::accumulate(v.begin(), v.end(), 0.0);
     return sum / v.size();
+}
+
+void plot_tagents(const Eigen::VectorXd& x, const Eigen::VectorXd& y, const std::vector<double>& angles) {
+    FILE *gnuplot = popen("gnuplot -persistent", "w");
+    if (gnuplot == NULL) {
+        std::cerr << "Error opening Gnuplot" << std::endl;
+        return;
+    }
+
+    fprintf(gnuplot, "set xlabel 'X-axis'\n");
+    fprintf(gnuplot, "set ylabel 'Y-axis'\n");
+
+    fprintf(gnuplot, "plot '-' with points title 'Points', "
+                     "'-' with vectors nohead title 'Tangent Vectors'\n");
+
+    for (int i = 0; i < x.size(); ++i) {
+        fprintf(gnuplot, "%lf %lf\n", x[i], y[i]);
+    }
+    fprintf(gnuplot, "e\n");
+
+    for (int i = 0; i < x.size(); ++i) {
+        double tangent_x = cos(angles[i]);
+        double tangent_y = sin(angles[i]);
+
+        double scale = 0.1;
+        fprintf(gnuplot, "%lf %lf %lf %lf\n", x[i], y[i], x[i] + tangent_x * scale, y[i] + tangent_y * scale);
+    }
+    fprintf(gnuplot, "e\n");
+
+    fclose(gnuplot);
 }
 
 
@@ -242,39 +276,27 @@ int main(int argc, char* argv[]) {
     std::vector<double> points_tangents = get_tangent_angles(points);
     
     // EIGEN
+    Eigen::VectorXd x_norm = x.normalized();
+    Eigen::VectorXd y_norm = y.normalized();
+
     int n = x.size();
     Eigen::VectorXd a(n), b(n), c(n), d(n);
-    computeSplineCoefficients(x, y, a, b, c, d);
+    compute_spline_coefficients(x_norm, y_norm, a, b, c, d);
 
     std::vector<double> tangent_angles;
     std::cout << "First and Second Derivatives at Data Points:" << std::endl;
-    for (int i = 0; i < n - 1; ++i) {
-        double x_query = x[i];
-        double first_deriv = firstDerivative(x_query, x, a, b, c, d);
-        double second_deriv = secondDerivative(x_query, x, a, b, c, d);
+    for (int i = 0; i < n; ++i) {
+        double x_query = x_norm[i];
+        double first_deriv = first_derivative(x_query, x_norm, a, b, c, d);
 
         double tangent_angle = std::atan(first_deriv);
         tangent_angles.push_back(tangent_angle);
 
-        std::cout << "Point (" << x_query << ", " << y[i] << ") -> "
+        std::cout << "Point (" << x[i] << ", " << y[i] << ") -> "
                   << "First Derivative (Slope): " << first_deriv
-                  << ", Second Derivative (Curvature): " << second_deriv 
                   << ", Tangent Angle: " << tangent_angle 
                   << ", LQR Tangent Angle: " << points_tangents[i] << std::endl;
     }
-
-    double x_query = x[n - 1];
-    double first_deriv = firstDerivative(x_query, x, a, b, c, d);
-    double second_deriv = secondDerivative(x_query, x, a, b, c, d);
-
-    double tangent_angle = std::atan(first_deriv);
-    tangent_angles.push_back(tangent_angle);
-
-    std::cout << "Point (" << x_query << ", " << y[n - 1] << ") -> "
-              << "First Derivative (Slope): " << first_deriv
-              << ", Second Derivative (Curvature): " << second_deriv 
-              << ", Tangent Angle: " << tangent_angle 
-              << ", LQR Tangent Angle: " << points_tangents[n - 1] << std::endl;
 
     std::vector<double> absolute_differences = elem_wise_vector_diff<double>(tangent_angles, points_tangents);
     if (absolute_differences.size() == 0) {
@@ -292,6 +314,10 @@ int main(int argc, char* argv[]) {
     double mean_error = vector_mean<double>(absolute_differences);
     
     std::cout << "Absolute Mean Error: " << mean_error << std::endl;
+
+    plot_tagents(x, y, points_tangents);
+
+    plot_tagents(x, y, tangent_angles);
 
     return 0;
 }
